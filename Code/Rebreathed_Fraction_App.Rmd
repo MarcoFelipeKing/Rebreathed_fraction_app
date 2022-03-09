@@ -1,0 +1,154 @@
+---
+title: "Airborne Transimission of SARS-CoV-2 Onboard a Hitachi 802 Series"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(shiny)
+ packages_required = c("flexdashboard","tidyr","shiny","dplyr","magrittr","dbplyr","ggpubr","lubridate","janitor","shinywidgets","ggplot2")
+ invisible(lapply(packages_required, require, character.only = TRUE))
+ 
+```
+
+Column {.sidebar}
+-----------------------------------------------------------------------
+
+
+<!-- 1. Select a input parameters:  -->
+  
+Use the <b>drop-down menu</b> and <b>sliders </b> to investigate parameter combinations. 
+```{r}
+
+
+sliderInput("S", label = "Number of Susceptibles (-):",
+            min = 1, max = 100, value = 35, step = 1)
+
+sliderInput("I", label = "Number of Infectors (-):",
+            min = 1, max = 3, value = 1, step = 1)
+
+sliderInput("C", label = "Measured CO2 value (ppm):",
+            min = 450, max = 5000, value = 2600, step = 50)
+
+sliderInput("t", label = "Time onboard (h):",
+            min = 0.1, max = 3, value = 1, step = 0.2)
+
+sliderInput("q", label = "Quanta value (per hour):",
+            min = 10, max = 1500, value = 100, step = 50)
+
+# sliderInput("p", label = "Pulmonary breathing rate (l/min):",
+#             min = 6, max = 13, value = 10, step = 1)
+```
+
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+
+
+
+### Train carriage
+
+![Static heatmap of CO2 within a train carriage from Grantham to London with a loading of 34](Images/Train_CO2.png){width=500}
+
+
+
+### Probability of n exposed
+The exact probability of n exposed:
+
+```{r}
+
+# E=S(1-exp(-I*p*q*t/Q)) Expected value
+S<-reactive({
+  input$S 
+}
+)
+#S=50
+# I=input$I
+# p=input$p/1000*60
+# q=input$q
+# t=input$time
+# Q=input$Q
+Ca=37500 #ppm added CO2 in breath from Rudnick and Milton 2003
+C0=450 #ppm background CO2
+
+myfun<-function(n){
+  #P=choose(input$S,n)*(1-exp(-input$I*input$p*input$q*input$t/input$Q))^n*(exp(-input$I*input$p*input$q*input$t/input$Q))^(input$S-n)
+  f=(input$C-C0)/Ca
+  P=choose(input$S,n)*(1-exp(-input$I/(input$S+input$I)*f*input$q*input$t))^n*(exp(-input$I/(input$S+input$I)*f*input$q*input$t))^(input$S-n)
+}
+
+d<-reactive({
+  purrr::map(.x = 1:as.integer(input$S),myfun)
+})
+
+#renderTable(d()%>%head())
+
+renderPlot({
+
+ #purrr::map(.x = 1:as.integer(50),myfun) %>% 
+  d() %>% unlist() %>% 
+  as_tibble() %>% 
+  mutate(n=1:input$S) %>% 
+  ggplot()+
+  geom_col(aes(x=n,y=value, fill=value))+
+  annotate("text", x = 30, y = 0.18, label = paste("S=",input$S,",","I=",input$I,",","C=",input$C,",","q=",input$q))+
+  xlab("Number of cases")+
+  ylab("Probability [0-1]")+
+  ggpubr::theme_pubr(base_size = 14)+
+  theme(legend.position="none")
+})
+```
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+
+### Risk model
+
+The mean number of exposed individuals at time $t$ is given by
+
+$$ \begin{eqnarray*}
+m_E(t) &=& \mathbb{E}[E(t)] \ = \ S_0\left(1-e^{-\frac{fqI_0t}{S_0+I_0}}\right),\quad t\geq0.
+\end{eqnarray*} $$
+Where $f=\dfrac{C-C_0}{Ca}$, $C$ is the measured $CO_2$ concentration, $C_0$ is the background $CO_2$ concentration and $C_a$ is the added concentration of $CO_2$ contributed by exhaled breath (37.5Kppm).
+We note that, in the equation above, $P_I(t)=1-e^{-\frac{fqI_0t}{S_0+I_0}}$ can then be interpreted as the probability of any initially susceptible individual in the room being infected/exposed after time $t$. In fact, the number of exposed individuals over time follows a Binomial distribution $E(t)\sim Bin(S_0,P_I(t))$, and the probability of having exactly $n$ exposed individuals at time $t$ is equal to:
+
+$$
+\begin{eqnarray*}
+p_n(t) &=& \mathbb{P}(E(t)=n) \ = \ \binom{S_0}{n}\left(1-e^{-\frac{fqI_0t}{S_0+I_0}}\right)^n\left(e^{-\frac{fqI_0t}{S_0+I_0}}\right)^{S_0-n},\quad 0\leq n\leq S_0,
+\end{eqnarray*}
+$$
+for any $t\geq0$.
+
+<!-- ### Infection rate per 100,000 population in London: -->
+
+<!-- ```{r} -->
+<!-- fileURL<-"https://api.coronavirus.data.gov.uk/v2/data?areaType=region&areaCode=E12000007&metric=newCasesByPublishDate&metric=newCasesByPublishDateRollingRate&format=csv" -->
+<!-- COVIDdata <-vroom::vroom(fileURL)  %>% janitor::clean_names() -->
+
+<!-- fig <- COVIDdata%>% -->
+<!--   filter(area_name=="London" & date > "2020-08-01")%>%# plotly::plot_ly() -->
+<!--   ggplot()+ -->
+<!--   geom_bar(aes(x=lubridate::ymd(date),y=new_cases_by_publish_date_rolling_rate),stat='identity')+ -->
+<!--   xlab("Date")+ -->
+<!--   ylab("Rate per 100k")+ -->
+<!--   ggpubr::theme_pubr(base_size = 14)+ -->
+<!--   theme(legend.position="none") -->
+<!-- # fig <- plotly::add_trace(fig, x = ~ymd(date), y = ~new_cases_by_publish_date_rolling_rate, type = 'bar',name = 'Rate') -->
+<!-- # fig <- plotly::layout(fig, -->
+<!-- #       xaxis = list(title= "Date", zeroline = F),  -->
+<!-- #       yaxis = list(title = "Rate per 100K", zeroline = F) -->
+<!-- #       ) -->
+<!-- suppressWarnings((fig)) -->
+<!-- ``` -->
+
+### Risk table
+
+```{r}
+
+renderTable(d()%>%head())
+```
+
